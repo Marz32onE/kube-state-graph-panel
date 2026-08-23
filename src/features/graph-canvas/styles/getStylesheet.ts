@@ -37,8 +37,9 @@ function resolveIconUri(kind: string | undefined, iconColor: string, usageRatio?
 }
 
 // Title-case each whitespace-separated word ("physical network" → "Physical Network").
-// Used ONLY as a render-time label mapper for the physical-network fabric box — it
-// never rewrites `data.label`, so the node's identity/query value is untouched.
+// Used ONLY as a render-time label mapper — for the physical-network fabric box and the
+// synthesized node group. It never rewrites `data.label`, so a node's identity/query
+// value is untouched.
 function titleCaseWords(text: string): string {
   return text.replace(/\S+/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
 }
@@ -150,6 +151,22 @@ export function getStylesheet({ theme, colorMap = EDGE_STYLE_BY_TYPE }: GetStyle
       'background-image-opacity': 1,
     },
   }));
+
+  // Same folder treatment for the synthesized node group, which is kind-less too but
+  // carries no accent FIELD to key on — it borrows its cluster's accent through the same
+  // parent-chain walk that tints the expanded box, so the folded and unfolded states agree.
+  // A collapsed node drops out of :parent and would otherwise fall through to the base
+  // `node` rule's fallback kind glyph.
+  const collapsedNodeGroupFolderSelector: CyStylesheet = {
+    selector: 'node[?isNodeGroup].cy-expand-collapse-collapsed-node',
+    style: {
+      'background-image': ((ele: cytoscape.NodeSingular): string =>
+        folderIcon(resolveParentClusterColor(ele, iconColor))) as unknown as string,
+      'background-fit': 'contain',
+      'background-clip': 'none',
+      'background-image-opacity': 1,
+    },
+  };
 
   const stylesheet: CyStylesheet[] = [
     {
@@ -329,6 +346,21 @@ export function getStylesheet({ theme, colorMap = EDGE_STYLE_BY_TYPE }: GetStyle
         'font-weight': 600,
       },
     },
+    {
+      // Panel-synthesized node group (`cluster > node group > node`) — the box that folds a
+      // cluster's K8s machines away. Header only: it deliberately has NO accent field of its
+      // own, so the tint and label colour it inherits from node:parent (its cluster's accent,
+      // resolved by the parent-chain walk) are exactly right and must not be overridden here.
+      // Same title-cased render-only mapper as the fabric box, so `data.label` stays `nodes`.
+      // Declared after node:parent so the header wins.
+      selector: 'node[?isNodeGroup]',
+      style: {
+        label: ((ele: cytoscape.NodeSingular): string =>
+          titleCaseWords(String(ele.data('label') ?? ''))) as unknown as string,
+        'font-size': 17,
+        'font-weight': 600,
+      },
+    },
     // K8s `node` box — aligned with the decorative group headers ONLY WHEN it is an
     // actual compound: a "Node: " kind prefix (mirroring `Cluster: `/`Namespace: `/
     // `Release Unit: `) + the same enlarged, semibold label. RENDER-ONLY function mapper —
@@ -359,6 +391,7 @@ export function getStylesheet({ theme, colorMap = EDGE_STYLE_BY_TYPE }: GetStyle
       },
     },
     ...collapsedDecorativeFolderSelectors,
+    collapsedNodeGroupFolderSelector,
     ...statusSelectors,
     ...collapsedContainerStatusSelectors,
     {

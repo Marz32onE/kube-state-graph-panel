@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { computeVisibility, isFilterableKind } from '../../features/element-filter';
 import { EmptyState, GraphCanvas, LoadingOverlay, type GraphViewportApi } from '../../features/graph-canvas';
-import { useGraphData, wrapSwitchFabric } from '../../features/graph-data';
+import { useGraphData, wrapNodeGroup, wrapSwitchFabric } from '../../features/graph-data';
 import { computeHits, resolveSearchHits, SearchBar, type SearchResult } from '../../features/graph-search';
 import {
   ApplicationLegend,
@@ -268,10 +268,15 @@ export function KsgPanel(props: Readonly<KsgPanelProps>): React.JSX.Element {
   // View-transform pipeline (pure, mode-threaded): applyPodParentMode reshapes the
   // backend D6 hierarchy (controller = payload as-is; node = re-parent pods under their
   // K8s node, strip workload groups); wrapSwitchFabric synthesizes the virtual
-  // `network > switch` compound for parent-less switches (switch-tier-layout). Namespace
-  // / application grouping is backend-owned now — no client-side synthesis pass.
+  // `network > switch` compound for parent-less switches (switch-tier-layout);
+  // wrapNodeGroup boxes each cluster's K8s nodes into a `cluster > node group > node`
+  // tier (node-group-compound). The two wrappers act on disjoint element sets, so their
+  // order relative to each other is arbitrary — but BOTH must come after
+  // applyPodParentMode, whose node mode resolves cluster ancestry along the ORIGINAL
+  // parent chain and would trip over a tier inserted ahead of it. Namespace / application
+  // grouping is backend-owned now — no client-side synthesis pass.
   const elements = useMemo(
-    () => wrapSwitchFabric(applyPodParentMode(baseElements, podParentMode)),
+    () => wrapNodeGroup(wrapSwitchFabric(applyPodParentMode(baseElements, podParentMode))),
     [baseElements, podParentMode]
   );
 

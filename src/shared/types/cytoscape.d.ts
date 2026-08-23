@@ -93,6 +93,15 @@ declare module 'cytoscape' {
     isStorageCluster?: boolean; // true only on a backend storage-cluster group node
     storageCluster?: string; // ONTAP cluster name carried on the group node
     storageClusterColor?: string; // accent assigned in normalize so the stylesheet stays pure
+    // PANEL-SYNTHESIZED node group (wrapNodeGroup) — the `cluster > node group > node`
+    // tier that boxes a cluster's K8s machines. Never comes from the wire: normalize has
+    // no idea it exists, so unlike every flag above it appears only AFTER the view
+    // transforms run. Kind-less like isNamespace / isApplication, and carries no accent
+    // field of its own — the box inherits its cluster's accent through the stylesheet's
+    // parent-chain walk. Unlike every other decorative group it stays SELECTABLE: the
+    // expand-collapse `+`/`-` cue is drawn only on a SELECTED parent, and folding the
+    // group is the whole point of it.
+    isNodeGroup?: boolean;
   }
 
   // RED measurements the backend attaches to trace-derived edges (upstream `data.metrics`),

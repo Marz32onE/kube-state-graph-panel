@@ -131,6 +131,14 @@ exports[`getStylesheet matches snapshot for default theme 1`] = `
     },
   },
   {
+    "selector": "node[?isNodeGroup]",
+    "style": {
+      "font-size": 17,
+      "font-weight": 600,
+      "label": [Function],
+    },
+  },
+  {
     "selector": "node[kind='node']:parent",
     "style": {
       "font-size": 18,
@@ -182,6 +190,15 @@ exports[`getStylesheet matches snapshot for default theme 1`] = `
   },
   {
     "selector": "node[?isStorageCluster].cy-expand-collapse-collapsed-node",
+    "style": {
+      "background-clip": "none",
+      "background-fit": "contain",
+      "background-image": [Function],
+      "background-image-opacity": 1,
+    },
+  },
+  {
+    "selector": "node[?isNodeGroup].cy-expand-collapse-collapsed-node",
     "style": {
       "background-clip": "none",
       "background-fit": "contain",

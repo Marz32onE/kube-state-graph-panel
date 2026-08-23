@@ -6,6 +6,11 @@ const node = (id: string, kind: string, extra: Record<string, unknown> = {}): cy
   ({ group: 'nodes', data: { id, kind, ...extra } }) as unknown as cytoscape.ElementDefinition;
 const cluster = (id: string): cytoscape.ElementDefinition =>
   ({ group: 'nodes', data: { id, isCluster: true } }) as unknown as cytoscape.ElementDefinition;
+const nodeGroup = (id: string, parent?: string): cytoscape.ElementDefinition =>
+  ({
+    group: 'nodes',
+    data: { id, isNodeGroup: true, label: 'nodes', ...(parent !== undefined ? { parent } : {}) },
+  }) as unknown as cytoscape.ElementDefinition;
 const edge = (id: string, source: string, target: string, edgeType: string): cytoscape.ElementDefinition =>
   ({ group: 'edges', data: { id, source, target, edgeType } }) as unknown as cytoscape.ElementDefinition;
 
@@ -61,6 +66,38 @@ describe('computeVisibility', () => {
     const { visibleNodeIds } = computeVisibility(elements, ['pod'], ['pod-calls-pod']);
     expect(visibleNodeIds.has('net')).toBe(false);
     expect(visibleNodeIds.has('sw1')).toBe(false);
+  });
+
+  it('never kind-filters the synthesized node group, and keeps its nodes reachable', () => {
+    // The group is kind-less, so no visibleKinds list — however stale — can hide it.
+    // Hiding it would hide every K8s node inside it (visibility is the AND over ancestors).
+    const elements = [
+      cluster('cl'),
+      nodeGroup('ng', 'cl'),
+      node('n1', 'node', { parent: 'ng' }),
+      node('p', 'pod', { parent: 'n1' }),
+      edge('e', 'p', 'n1', 'pod-to-node'),
+    ];
+    const { visibleNodeIds } = computeVisibility(elements, ['node', 'pod'], ['pod-to-node']);
+    expect(visibleNodeIds.has('ng')).toBe(true);
+    expect(visibleNodeIds.has('n1')).toBe(true);
+  });
+
+  it('orphan-cascades the node group away when its nodes are filtered out', () => {
+    const elements = [
+      cluster('cl'),
+      nodeGroup('ng', 'cl'),
+      node('n1', 'node', { parent: 'ng' }),
+      node('p', 'pod', { parent: 'cl' }),
+      node('p2', 'pod', { parent: 'cl' }),
+      edge('e', 'p', 'p2', 'pod-calls-pod'),
+    ];
+    // `node` hidden → the group has no visible child and no visible incident edge.
+    const { visibleNodeIds } = computeVisibility(elements, ['pod'], ['pod-calls-pod']);
+    expect(visibleNodeIds.has('n1')).toBe(false);
+    expect(visibleNodeIds.has('ng')).toBe(false);
+    // The cluster survives on its still-visible pods.
+    expect(visibleNodeIds.has('cl')).toBe(true);
   });
 
   it('hides edges whose edgeType is filtered out', () => {
