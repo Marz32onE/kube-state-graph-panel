@@ -260,7 +260,7 @@ v1 範圍內每個 panel 例項 MUST 綁定單一 datasource 實例;Panel 不負
 - **pod `application`**:backend 值為非空字串時原樣透傳;缺失或空字串時 MUST 省略該欄(`exactOptionalPropertyTypes`:不寫 `undefined` 值)。
 - **service / pvc `application`**(backend D6):service 與 pvc leaf 帶 backend 解析的 ArgoCD `application` 時,MUST 以**與 pod `application` 完全相同**的規則透傳(非空字串保留、缺失或空字串省略)。`containers` 與 typed `owner` 仍**僅限 pod**——service / pvc 即使 backend 誤送這兩欄,normalize MUST NOT 帶上。
 - **pod `containers`**:逐項驗證——`name` 與 `image` 皆為非空字串的項目保留,形狀不符的項目 MUST 丟棄(anti-corruption);驗證後為空陣列或欄位缺失時 MUST 省略該欄。
-- **controller `kind`**:後端 `controller` 群組之 `type` 為字面值 `controller`、不帶 `kind`;normalize MUST 自其**任一子 pod**(`pod.parent === controllerId`)的 `owner.kind` **小寫化**推導出 controller 的 `kind`(如 `StatefulSet` → `statefulset`),並標 `isController: true`,使 controller 成為 Workloads kind 並保留 detail 面板。
+- **controller `kind`**:後端 `controller` 群組之 `type` 為字面值 `controller`、不帶 `kind`;normalize MUST 自其**任一子 pod**(`pod.parent === controllerId`)的 `owner.kind` **小寫化**推導出 controller 的 `kind`(如 `StatefulSet` → `statefulset`),並標 `isController: true`,使 controller 成為 Workloads kind 並保留 detail 面板。**Exception — the derived kind MUST be refused when it names a KNOWN non-Workloads kind.** An owner kind lands in the same namespace as the panel's own node kinds, and a static pod's ownerReference is the NODE object: `Node` lowercases to `node`, which is the kind of a K8s machine. Adopting it would give the group the machine glyph, the `Node: ` compound label reserved for a node box, and membership of the `node` kind toggle. In that case the controller MUST stay kind-less (still `isController: true`). An **unknown** owner kind (an operator CRD such as `Rollout`) collides with nothing and MUST still be adopted, so its name keeps reaching the tooltip and the detail-panel header.
 - **controller `application`**(enrich,backend 不送):MUST 自其**子 pod**(`pod.parent === controllerId`)的 `application` 聚合——取任一帶值的子 pod(以穩定排序確定性選取**首個**);無任何子 pod 帶值時 MUST 省略該欄。
 - **controller `containers`**:MUST 自其**所有子 pod** 的 `containers` 聯集聚合,以 **(name, image)** 去重、穩定排序;無任何子 pod 帶 containers 時 MUST 省略該欄。
 - 解析 / 聚合 MUST 為純函式、確定性、immutable(產生新元素,不就地修改輸入)。
@@ -296,6 +296,18 @@ v1 範圍內每個 panel 例項 MUST 綁定單一 datasource 實例;Panel 不負
 
 - **WHEN** backend `controller` 群組(`type: "controller"`,無 `kind`)旗下某子 pod 帶 `owner: { kind: "StatefulSet", name: "mongo" }`
 - **THEN** enrich 後該 controller 節點 `data.kind` 為 `'statefulset'`(小寫化)且 `data.isController === true`
+
+#### Scenario: a static pod's `Node` owner kind is refused rather than adopted
+
+- **WHEN** a backend `controller` group's child pods carry `owner: { kind: "Node", name: "<a node name>" }` — the shape
+  kube-state-metrics reports for static (mirror) pods such as `etcd` / `kube-apiserver`
+- **THEN** the enriched controller node carries **no** `data.kind`
+- **AND** `data.isController === true` is still set, so the group keeps its container behaviour
+
+#### Scenario: an unknown owner kind is still adopted
+
+- **WHEN** a backend `controller` group's child pods carry `owner: { kind: "Rollout", name: "api" }`
+- **THEN** the enriched controller node's `data.kind` is `'rollout'`
 
 #### Scenario: controller 自子 pod 聚合 application
 
@@ -364,7 +376,7 @@ v1 範圍內每個 panel 例項 MUST 綁定單一 datasource 實例;Panel 不負
 - `namespace` → `{ isNamespace, namespace: <label>, namespaceColor }` — **reusing** the existing `isNamespace` flag, stylesheet selector, and `NamespaceLegend`; the accent is a fixed per-kind colour (see panel-rendering, "Decorative compound groups use fixed per-kind colours and a kind-prefixed label").
 - `application` → `{ isApplication, application: <label>, applicationColor }` — **adding** the `isApplication` flag, `applicationPalette.ts`, a stylesheet selector, and `ApplicationLegend`; the accent is likewise a fixed per-kind colour.
 - `storage-cluster` → `{ isStorageCluster, storageCluster: <label>, storageClusterColor }` — the decorative frame around an ONTAP cluster, accent likewise a fixed per-kind colour; `selectable: false` like `cluster` (the selectable real nodes are the `netapp-node` / `netapp-aggr` beneath it).
-- `controller` → `{ isController: true, kind: <the child pod's owner.kind, lowercased> }` (see "pod / service / pvc `application` and pod `containers` passthrough, and controller aggregation"): a controller carries a real `kind` so it keeps its detail panel, making it both a compound parent and a glyph-bearing node (drawing that kind's icon when collapsed).
+- `controller` → `{ isController: true, kind: <the child pod's owner.kind, lowercased — unless it names a known non-Workloads kind, in which case there is no kind> }` (see "pod / service / pvc `application` and pod `containers` passthrough, and controller aggregation"): a controller normally carries a real `kind` so it keeps its detail panel, making it both a compound parent and a glyph-bearing node (drawing that kind's icon when collapsed). A static pod's `Node` owner is the refused case — it would otherwise be indistinguishable from a K8s machine.
 
 The `namespace` / `application` / `storage-cluster` groups have `labels: {}`, no status, and no edges; they exist purely as `data.parent` targets.
 
