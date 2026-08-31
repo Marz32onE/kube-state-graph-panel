@@ -40,9 +40,19 @@ export function isDashboardEligible(d: cytoscape.NodeDataDefinition): boolean {
   return d.isCluster !== true && d.isStorageCluster !== true && d.isNamespace !== true && d.isApplication !== true;
 }
 
-// `cluster` param: nearest `isCluster` ancestor's `data.cluster` (walked via `data.parent` —
-// the only uniform source, since synthesized controllers carry no cluster/labels), else the
-// node's own `labels.cluster`, else `undefined`.
+// `cluster` param: the nearest cluster container above the node, else the node's own labels,
+// else `undefined` (omit). ONE param name carries both namespaces — a Kubernetes cluster
+// (`isCluster` → `data.cluster`, `labels.cluster`) and an ONTAP one (`isStorageCluster` →
+// `data.storageCluster`, `labels.ontap_cluster`). The request already carries `kind`, so the
+// backend tells a `netapp-*` node's ONTAP name from a workload's K8s name without a second
+// param; before this, a NetApp node — which has no `isCluster` ancestor and by contract never
+// carries `labels.cluster` — sent no `cluster` at all.
+//
+// The walk is a single upward pass (via `data.parent` — the only uniform source, since
+// synthesized controllers carry no cluster/labels) that returns on the FIRST container of
+// either flag: the two kinds of cluster container are both top-level and never nest inside one
+// another, so no node has both. The label fallback is strictly ordered, K8s first, so a node
+// somehow carrying both labels resolves the same way every time.
 function resolveCluster(
   elements: readonly cytoscape.ElementDefinition[],
   selfData: cytoscape.NodeDataDefinition
@@ -67,11 +77,22 @@ function resolveCluster(
     if (parent.isCluster === true && typeof parent.cluster === 'string' && parent.cluster.length > 0) {
       return parent.cluster;
     }
+    if (
+      parent.isStorageCluster === true &&
+      typeof parent.storageCluster === 'string' &&
+      parent.storageCluster.length > 0
+    ) {
+      return parent.storageCluster;
+    }
     cur = parent;
     hops += 1;
   }
   const labelCluster = selfData.labels?.cluster;
-  return typeof labelCluster === 'string' && labelCluster.length > 0 ? labelCluster : undefined;
+  if (typeof labelCluster === 'string' && labelCluster.length > 0) {
+    return labelCluster;
+  }
+  const labelOntapCluster = selfData.labels?.ontap_cluster;
+  return typeof labelOntapCluster === 'string' && labelOntapCluster.length > 0 ? labelOntapCluster : undefined;
 }
 
 // Project one node's `data` onto params: drop denylist + non-scalars, rename `label` →
