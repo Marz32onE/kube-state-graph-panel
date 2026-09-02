@@ -216,6 +216,99 @@ describe('computeVisibility', () => {
     });
   });
 
+  describe('hidden-ancestor endpoints', () => {
+    // Cytoscape's effective visibility is the AND of a node and every ancestor, so a
+    // descendant of a kind-filtered compound is already off-canvas. These cover the edges
+    // that used to stay drawn against their still-visible far endpoint.
+
+    it('drops the pod and its pod-mounts-pvc edge when the controller kind is hidden', () => {
+      const elements = [
+        cluster('cl'),
+        node('ctrl', 'deployment', { parent: 'cl', isController: true }),
+        node('p', 'pod', { parent: 'ctrl' }),
+        node('v', 'pvc', { parent: 'cl' }),
+        node('aggr', 'netapp-aggr'),
+        edge('mount', 'p', 'v', 'pod-mounts-pvc'),
+        edge('store', 'v', 'aggr', 'pvc-to-netapp-aggr'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'pvc', 'netapp-aggr'],
+        ['pod-mounts-pvc', 'pvc-to-netapp-aggr']
+      );
+      expect(visibleNodeIds.has('ctrl')).toBe(false);
+      expect(visibleNodeIds.has('p')).toBe(false);
+      expect(visibleEdgeIds.has('mount')).toBe(false);
+      // The far side keeps its own two-sided storage chain — only the one-sided edge goes.
+      expect(visibleNodeIds.has('v')).toBe(true);
+      expect(visibleNodeIds.has('aggr')).toBe(true);
+      expect(visibleEdgeIds.has('store')).toBe(true);
+    });
+
+    it('orphan-cascades the pvc when the dropped edge was its last', () => {
+      const elements = [
+        cluster('cl'),
+        node('ctrl', 'deployment', { parent: 'cl', isController: true }),
+        node('p', 'pod', { parent: 'ctrl' }),
+        node('v', 'pvc', { parent: 'cl' }),
+        // Unrelated survivors, so the assertion isolates the claim from the cluster cascade.
+        node('a', 'pod', { parent: 'cl' }),
+        node('b', 'pod', { parent: 'cl' }),
+        edge('mount', 'p', 'v', 'pod-mounts-pvc'),
+        edge('calls', 'a', 'b', 'pod-calls-pod'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'pvc'],
+        ['pod-mounts-pvc', 'pod-calls-pod']
+      );
+      expect(visibleEdgeIds.has('mount')).toBe(false);
+      expect(visibleNodeIds.has('v')).toBe(false);
+      expect(visibleNodeIds.has('cl')).toBe(true);
+      expect(visibleNodeIds.has('a')).toBe(true);
+      expect(visibleNodeIds.has('b')).toBe(true);
+    });
+
+    it('drops a leaving edge for any hidden compound kind, not just deployment', () => {
+      const elements = [
+        node('sts', 'statefulset', { isController: true }),
+        node('p', 'pod', { parent: 'sts' }),
+        node('svc', 'service'),
+        node('other', 'pod'),
+        edge('leave', 'p', 'svc', 'pod-calls-service'),
+        edge('sel', 'svc', 'other', 'service-selects-pod'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'service'],
+        ['pod-calls-service', 'service-selects-pod']
+      );
+      expect(visibleNodeIds.has('p')).toBe(false);
+      expect(visibleEdgeIds.has('leave')).toBe(false);
+      // The outside node stays on its own remaining edge.
+      expect(visibleNodeIds.has('svc')).toBe(true);
+      expect(visibleNodeIds.has('other')).toBe(true);
+      expect(visibleEdgeIds.has('sel')).toBe(true);
+    });
+
+    it('leaves an edge alone while both endpoints and all their ancestors stay visible', () => {
+      const elements = [
+        cluster('cl'),
+        node('ctrl', 'deployment', { parent: 'cl', isController: true }),
+        node('p', 'pod', { parent: 'ctrl' }),
+        node('v', 'pvc', { parent: 'cl' }),
+        edge('mount', 'p', 'v', 'pod-mounts-pvc'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'pvc', 'deployment'],
+        ['pod-mounts-pvc']
+      );
+      expect([...visibleNodeIds].sort()).toEqual(['cl', 'ctrl', 'p', 'v']);
+      expect([...visibleEdgeIds]).toEqual(['mount']);
+    });
+  });
+
   describe('ingress gateway toggle', () => {
     const INGRESS_LABELS = { labels: { role: 'ingress-gateway' } };
     const ALL_KINDS = ['pod', 'service', 'node'] as const;

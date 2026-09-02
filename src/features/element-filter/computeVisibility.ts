@@ -87,6 +87,28 @@ export function computeVisibility(
     }
   }
 
+  // Fold in the descendants of everything the two passes above left hidden, so
+  // `visibleNodeIds` agrees with what the canvas actually draws: cytoscape's effective
+  // visibility is the AND of a node and every ancestor, so a pod nested under a
+  // kind-filtered controller is already off-canvas. Without this the edge pass below sees
+  // both endpoints "visible" and keeps a `pod-mounts-pvc` drawn against a PVC whose pod is
+  // gone. Seeding from "every node id NOT in visibleNodeIds" also keeps the kind-less
+  // compounds (`network`, cluster, node group) out of the seed — they are never
+  // kind-filtered, so only hideOrphans below may reclaim them.
+  const hiddenSoFar: string[] = [];
+  for (const el of elements) {
+    if (el.group !== 'nodes') {
+      continue;
+    }
+    const id = (el.data as Record<string, unknown>).id;
+    if (typeof id === 'string' && !visibleNodeIds.has(id)) {
+      hiddenSoFar.push(id);
+    }
+  }
+  for (const id of collectDescendantIds(childrenByParent, hiddenSoFar)) {
+    visibleNodeIds.delete(id);
+  }
+
   for (const el of elements) {
     if (el.group !== 'edges') {
       continue;
