@@ -25,6 +25,23 @@ describe('deriveContainers — node mode', () => {
     expect(collapseNoun).toBe('nodes');
   });
 
+  it('never lists the synthesized node group, and still tints the node through it', () => {
+    const els = [
+      node({ id: 'cluster/prod', isCluster: true, clusterColor: '#0ea5e9', label: 'prod' }),
+      node({ id: 'node-group/cluster/prod', isNodeGroup: true, label: 'nodes', parent: 'cluster/prod' }),
+      node({ id: 'node/worker-0', kind: 'node', parent: 'node-group/cluster/prod', label: 'worker-0' }),
+      node({ id: 'pod/a', kind: 'pod', parent: 'node/worker-0', label: 'a' }),
+    ];
+    for (const mode of ['node', 'controller'] as const) {
+      const { containerEntries, containerIds } = deriveContainers(els, NEUTRAL, mode);
+      expect(containerIds).not.toContain('node-group/cluster/prod');
+      expect(containerEntries.map((e) => e.name)).not.toContain('nodes');
+    }
+    // The node keeps its cluster tint: the ancestor walk climbs THROUGH the kind-less
+    // group (which carries no colour of its own) to the cluster accent.
+    expect(deriveContainers(els, NEUTRAL, 'node').containerEntries).toEqual([{ name: 'worker-0', color: '#0ea5e9' }]);
+  });
+
   it('returns every node-container id (not name-deduped) for the collapse toggle', () => {
     const els = [
       node({ id: 'cluster/prod', isCluster: true, clusterColor: '#0ea5e9', label: 'prod' }),
@@ -131,8 +148,22 @@ describe('deriveContainers — controller mode', () => {
   it('controller mode colours a controller nested under a namespace box by its cluster ancestor', () => {
     const els = [
       node({ id: 'cl', isCluster: true, clusterColor: '#0ea5e9', label: 'prod' }),
-      node({ id: 'nsbox/cl/team-a', isNamespace: true, namespaceColor: '#e8833a', namespace: 'team-a', parent: 'cl', label: 'team-a' }),
-      node({ id: 'c1', kind: 'statefulset', isController: true, label: 'mongo', parent: 'nsbox/cl/team-a', namespace: 'team-a' }),
+      node({
+        id: 'nsbox/cl/team-a',
+        isNamespace: true,
+        namespaceColor: '#e8833a',
+        namespace: 'team-a',
+        parent: 'cl',
+        label: 'team-a',
+      }),
+      node({
+        id: 'c1',
+        kind: 'statefulset',
+        isController: true,
+        label: 'mongo',
+        parent: 'nsbox/cl/team-a',
+        namespace: 'team-a',
+      }),
       node({ id: 'p1', kind: 'pod', parent: 'c1' }),
     ];
     const { containerEntries } = deriveContainers(els, NEUTRAL, 'controller');

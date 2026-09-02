@@ -269,15 +269,19 @@ describe('assembleDashboardParams', () => {
           health: 'online',
           usage: { usedBytes: 7e11, capacityBytes: 1e12 },
           usageRatio: 0.7,
-          labels: { cluster: 'prod' },
+          // Per the graph-data contract a netapp-aggr's labels are exactly
+          // {ontap_cluster, node} — it belongs to no K8s cluster and never carries `cluster`.
+          labels: { ontap_cluster: 'ontap-prod', node: 'ontap-prod-01' },
         },
       },
     ];
     const params = assembleDashboardParams(elements, 'sc');
-    expect(params).toEqual({ kind: 'netapp-aggr', name: 'aggr1', cluster: 'prod' });
+    expect(params).toEqual({ kind: 'netapp-aggr', name: 'aggr1', cluster: 'ontap-prod' });
     expect(params).not.toHaveProperty('health');
     expect(params).not.toHaveProperty('usage');
     expect(params).not.toHaveProperty('usageRatio');
+    // The owning ONTAP controller stays a label, not a param.
+    expect(params).not.toHaveProperty('node');
   });
 
   it('never sends a PVC storageclass name as a query param', () => {
@@ -340,6 +344,88 @@ describe('assembleDashboardParams', () => {
         { group: 'nodes', data: { id: 'ext', kind: 'external', label: 'api.example' } },
       ];
       expect(assembleDashboardParams(elements, 'ext')).toEqual({ kind: 'external', name: 'api.example' });
+    });
+
+    it('resolves a netapp-node cluster from its isStorageCluster parent (the ONTAP cluster name)', () => {
+      const elements: cytoscape.ElementDefinition[] = [
+        {
+          group: 'nodes',
+          data: { id: 'sc', label: 'ontap-prod', isStorageCluster: true, storageCluster: 'ontap-prod' },
+        },
+        {
+          group: 'nodes',
+          data: {
+            id: 'nn',
+            kind: 'netapp-node',
+            label: 'ontap-prod-01',
+            parent: 'sc',
+            labels: { ontap_cluster: 'ontap-prod' },
+          },
+        },
+      ];
+      expect(assembleDashboardParams(elements, 'nn')).toEqual({
+        kind: 'netapp-node',
+        name: 'ontap-prod-01',
+        cluster: 'ontap-prod',
+      });
+    });
+
+    it('walks a netapp-aggr up through its netapp-node parent to the isStorageCluster ancestor', () => {
+      const elements: cytoscape.ElementDefinition[] = [
+        {
+          group: 'nodes',
+          data: { id: 'sc', label: 'ontap-prod', isStorageCluster: true, storageCluster: 'ontap-prod' },
+        },
+        {
+          group: 'nodes',
+          data: {
+            id: 'nn',
+            kind: 'netapp-node',
+            label: 'ontap-prod-01',
+            parent: 'sc',
+            labels: { ontap_cluster: 'ontap-prod' },
+          },
+        },
+        {
+          group: 'nodes',
+          data: {
+            id: 'ag',
+            kind: 'netapp-aggr',
+            label: 'aggr1',
+            parent: 'nn',
+            labels: { ontap_cluster: 'ontap-prod', node: 'ontap-prod-01' },
+          },
+        },
+      ];
+      expect(assembleDashboardParams(elements, 'ag')).toEqual({
+        kind: 'netapp-aggr',
+        name: 'aggr1',
+        cluster: 'ontap-prod',
+      });
+    });
+
+    it('falls back to labels.ontap_cluster when the storage-cluster container is absent', () => {
+      const elements: cytoscape.ElementDefinition[] = [
+        {
+          group: 'nodes',
+          data: { id: 'nn', kind: 'netapp-node', label: 'ontap-dr-01', labels: { ontap_cluster: 'ontap-dr' } },
+        },
+      ];
+      expect(assembleDashboardParams(elements, 'nn')).toEqual({
+        kind: 'netapp-node',
+        name: 'ontap-dr-01',
+        cluster: 'ontap-dr',
+      });
+    });
+
+    it('prefers labels.cluster over labels.ontap_cluster when a node carries both', () => {
+      const elements: cytoscape.ElementDefinition[] = [
+        {
+          group: 'nodes',
+          data: { id: 'p1', kind: 'pod', label: 'mongo-0', labels: { cluster: 'dr', ontap_cluster: 'ontap-dr' } },
+        },
+      ];
+      expect(assembleDashboardParams(elements, 'p1')).toEqual({ kind: 'pod', name: 'mongo-0', cluster: 'dr' });
     });
   });
 

@@ -18,6 +18,21 @@ describe('deriveLegendKinds', () => {
     expect(deriveLegendKinds(els, NONE)).toEqual(['pod', 'service']);
   });
 
+  it('drops a synthesized node group (no kind) entirely, and hides the nodes it folds', () => {
+    const els = [
+      node({ id: 'cluster/prod', isCluster: true }),
+      node({ id: 'node-group/cluster/prod', isNodeGroup: true, label: 'nodes', parent: 'cluster/prod' }),
+      node({ id: 'node/w0', kind: 'node', parent: 'node-group/cluster/prod' }),
+      node({ id: 'svc/s', kind: 'service', parent: 'cluster/prod' }),
+    ];
+    // Expanded: the node is a childless container → a drawn leaf contributing its kind;
+    // the group itself contributes nothing (kind-less), exactly like a cluster.
+    expect(deriveLegendKinds(els, NONE)).toEqual(['node', 'service']);
+    // Collapsed: the group hides its nodes and STILL contributes no kind of its own —
+    // it folds to a folder glyph, not a resource icon.
+    expect(deriveLegendKinds(els, new Set(['node-group/cluster/prod']))).toEqual(['service']);
+  });
+
   it('drops a cluster (no kind) entirely', () => {
     const els = [
       node({ id: 'cluster/prod', isCluster: true }),

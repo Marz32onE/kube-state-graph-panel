@@ -2,6 +2,7 @@ import type cytoscape from 'cytoscape';
 
 import { APPLICATION_BEARING_KINDS } from '../../shared/constants/applicationBearingKinds';
 import { APPLICATION_COLOR } from '../../shared/constants/applicationPalette';
+import { CATEGORY_BY_KIND, type NodeCategory } from '../../shared/constants/categoryByKind';
 import { CLUSTER_COLOR } from '../../shared/constants/clusterPalette';
 import { isTrafficEdgeType } from '../../shared/constants/colorByEdgeType';
 import { FALLBACK_STATUS } from '../../shared/constants/colorByStatus';
@@ -547,6 +548,23 @@ function parseEdges(rawEdges: unknown[], nodeIds: ReadonlySet<string>): ParsedEd
   return { elements, errors };
 }
 
+// A controller group takes its kind from its child pods' owner kind, lowercased — which
+// lands in the SAME namespace as the panel's own node kinds. For an ordinary workload
+// owner the two agree (`Deployment` → `deployment`). A STATIC pod has no such owner: it is
+// a mirror pod whose ownerReference is the NODE object, and `Node`.toLowerCase() is exactly
+// the kind of a K8s machine. Adopting it paints the group with the machine glyph, hands it
+// the `Node: ` compound label meant for a node box, and makes the `node` kind toggle hide
+// the group along with real machines.
+//
+// So refuse any owner kind that names a KNOWN non-Workloads kind. An UNKNOWN kind (operator
+// CRD such as Rollout) still passes through — it collides with nothing, and its name keeps
+// reaching the tooltip and the detail-panel header.
+function controllerKindFromOwner(ownerKind: string): string | undefined {
+  const kind = ownerKind.toLowerCase();
+  const category = (CATEGORY_BY_KIND as Record<string, NodeCategory | undefined>)[kind];
+  return category !== undefined && category !== 'Workloads' ? undefined : kind;
+}
+
 // Stage 3 (D5) — enrich the backend's `controller` group nodes from their child pods so the
 // (left-click selection) detail panel (ApplicationTable / ContainerTable / dashboard URL) and
 // the collapsed-border tint keep working. The backend emits the controller group + its parent
@@ -576,6 +594,7 @@ function enrichControllers(nodeElements: cytoscape.ElementDefinition[]): cytosca
     );
 
     let kind: string | undefined;
+    let kindResolved = false;
     let worstRank: number | undefined; // undefined = no child pods (omit worstStatus)
     let application: string | undefined;
     const containersByKey = new Map<string, ContainerSpec>();
@@ -584,9 +603,11 @@ function enrichControllers(nodeElements: cytoscape.ElementDefinition[]): cytosca
 
     for (const child of children) {
       const cd = child.data as cytoscape.NodeDataDefinition;
-      // kind: lowercased owner.kind of the first child pod that has one (stable order).
-      if (kind === undefined && cd.owner !== undefined && cd.owner.kind.length > 0) {
-        kind = cd.owner.kind.toLowerCase();
+      // kind: from the owner of the first child pod that has one (stable order); the
+      // first owner decides even when it is refused, so `kindResolved` and not `kind`.
+      if (!kindResolved && cd.owner !== undefined && cd.owner.kind.length > 0) {
+        kind = controllerKindFromOwner(cd.owner.kind);
+        kindResolved = true;
       }
       // worstStatus: worst child-pod status (always written once there is ≥1 child).
       const r = STATUS_RANK[cd.status ?? FALLBACK_STATUS];

@@ -1064,6 +1064,23 @@ describe('normalizeGraph — controller enrichment', () => {
     expect(ctrl?.parent).toBe('cluster/prod');
   });
 
+  it('refuses an owner kind that collides with a known non-workload kind (static pods owned by Node)', () => {
+    // Static pods (etcd / kube-apiserver / …) are mirror pods whose ownerReference is the
+    // NODE object, so kube-state-metrics reports owner_kind=Node. Lowercased that is `node`
+    // — the kind of a K8s machine — and adopting it would paint the group with the machine
+    // glyph, give it the `Node: ` compound label, and let the `node` kind toggle hide it.
+    const ctrl = controllerOf(
+      enrichGraph(childPod('prod/etcd-cp', 'etcd-cp', {}, { kind: 'Node', name: 'ksg-demo-control-plane' }))
+    );
+    expect(ctrl?.isController).toBe(true);
+    expect(ctrl?.kind).toBeUndefined();
+  });
+
+  it('still adopts an UNKNOWN owner kind, so an operator CRD keeps naming itself', () => {
+    const ctrl = controllerOf(enrichGraph(childPod('prod/r1', 'rollout-0', {}, { kind: 'Rollout', name: 'api' })));
+    expect(ctrl?.kind).toBe('rollout');
+  });
+
   it('does NOT synthesize controllers (an owned pod with no controller group yields none)', () => {
     const raw = {
       elements: {

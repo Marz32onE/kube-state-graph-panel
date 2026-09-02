@@ -707,6 +707,50 @@ describe('KsgPanel', () => {
     expect(screen.queryByTestId('namespace-legend')).not.toBeInTheDocument();
   });
 
+  it('boxes the cluster’s K8s nodes in a node group in BOTH modes, expanded by default and absent from the legend', () => {
+    const frame: DataFrame = {
+      name: 'graph',
+      length: 1,
+      fields: [{ name: 'payload', type: FieldType.string, config: {}, values: [JSON.stringify(d6FullChainPayload)] }],
+    };
+    type CanvasProps = { elements?: cytoscape.ElementDefinition[]; collapsedIds?: Set<string> };
+    const lastProps = (): CanvasProps => (graphCanvasSpy.mock.calls as Array<[CanvasProps]>).at(-1)![0];
+    const nodeGroupOf = (props: CanvasProps): cytoscape.NodeDataDefinition | undefined =>
+      props.elements?.find((el) => (el.data as cytoscape.NodeDataDefinition).isNodeGroup === true)?.data;
+
+    render(
+      <KsgPanel
+        {...buildProps({
+          data: { state: LoadingState.Done, series: [frame], timeRange: stubTimeRange },
+          options: { ...defaultOptions, showLegend: true },
+        })}
+      />
+    );
+
+    // Controller mode (default): cluster > node group > node.
+    const controllerGroup = nodeGroupOf(lastProps());
+    expect(controllerGroup?.parent).toBe('cluster:demo');
+    expect(controllerGroup?.label).toBe('nodes');
+    const nodeData = (): cytoscape.NodeDataDefinition | undefined =>
+      lastProps().elements?.find((el) => el.data.id === 'demo/node-a')?.data;
+    expect(nodeData()?.parent).toBe(controllerGroup?.id);
+    // Expanded by default — only the controller is default-collapsed, never the group.
+    expect(lastProps().collapsedIds?.has(controllerGroup?.id as string)).toBe(false);
+    expect(lastProps().collapsedIds?.has('demo/controller/StatefulSet/mongo')).toBe(true);
+    // Kind-less → contributes no legend row and no swatch section of its own.
+    expect(screen.queryByTestId('node-group-legend')).not.toBeInTheDocument();
+
+    // Node mode: the group survives the flip and still wraps the node, not its pods.
+    act(() => {
+      fireEvent.click(screen.getByLabelText('Node'));
+    });
+    const nodeModeGroup = nodeGroupOf(lastProps());
+    expect(nodeModeGroup?.id).toBe(controllerGroup?.id);
+    expect(nodeData()?.parent).toBe(nodeModeGroup?.id);
+    expect(lastProps().elements?.find((el) => el.data.id === 'demo/p1')?.data.parent).toBe('demo/node-a');
+    expect(lastProps().collapsedIds?.has(nodeModeGroup?.id as string)).toBe(false);
+  });
+
   it('renders an Applications legend section in controller mode (none in node mode)', () => {
     const frame: DataFrame = {
       name: 'graph',

@@ -659,6 +659,58 @@ describe('getStylesheet', () => {
     cy.destroy();
   });
 
+  it('aligns the synthesized node-group header: title-cased render-only label + enlarged semibold font', () => {
+    const sheet = getStylesheet({ theme: createTheme() }) as unknown as Array<{
+      selector: string;
+      style?: StyleRecord;
+    }>;
+    const selectors = sheet.map((s) => s.selector);
+    const idx = selectors.indexOf('node[?isNodeGroup]');
+    expect(idx).toBeGreaterThan(-1);
+    // After node:parent (so the header wins), before the selection ring.
+    expect(idx).toBeGreaterThan(selectors.indexOf('node:parent'));
+    expect(idx).toBeLessThan(selectors.indexOf('node:selected'));
+    const style = sheet[idx]?.style ?? {};
+    expect(style['font-size']).toBe(17);
+    expect(style['font-weight']).toBe(600);
+    // The group deliberately declares no colour of its own — node:parent's cluster-accent
+    // tint is what it wants, and overriding it here would break the "one family" reading.
+    expect(style).not.toHaveProperty('background-color');
+    expect(style).not.toHaveProperty('color');
+    // Render-only label mapper; data.label stays the bare `nodes`.
+    const labelFn = style.label as NodeFn;
+    expect(labelFn(fakeEle({ label: 'nodes' }))).toBe('Nodes');
+  });
+
+  it('tints the node group and its collapsed folder glyph with the enclosing cluster accent', () => {
+    const cy = cytoscape({
+      headless: true,
+      styleEnabled: true,
+      style: getStylesheet({ theme: createTheme() }) as cytoscape.StylesheetStyle[],
+      elements: [
+        { group: 'nodes', data: { id: 'cluster/prod', label: 'prod', isCluster: true, clusterColor: '#14b8a6' } },
+        {
+          group: 'nodes',
+          data: { id: 'node-group/cluster/prod', label: 'nodes', isNodeGroup: true, parent: 'cluster/prod' },
+        },
+        {
+          group: 'nodes',
+          data: { id: 'node/worker-0', label: 'worker-0', kind: 'node', parent: 'node-group/cluster/prod' },
+        },
+      ],
+    });
+    const groupBox = cy.getElementById('node-group/cluster/prod');
+    // Expanded: a labelled backplate in the cluster's accent, no centre icon.
+    expect(groupBox.style('background-image')).toBe('none');
+    expect(groupBox.style('background-color')).toBe('rgb(20,184,166)');
+    expect(groupBox.style('label')).toBe('Nodes');
+    // Collapsed: the same folder glyph the other kind-less groups get, same accent —
+    // never the fallback kind glyph a kind-less leaf would fall through to.
+    groupBox.addClass('cy-expand-collapse-collapsed-node');
+    expect(groupBox.style('background-image')).toBe(tintSvgToDataUri(FOLDER_ICON_SVG, '#14b8a6'));
+    cy.destroy();
+  });
+
   it('dims faded edges further than faded nodes (one class, both fade reasons)', () => {
     const sheet = getStylesheet({ theme: createTheme() }) as unknown as Array<{
       selector: string;

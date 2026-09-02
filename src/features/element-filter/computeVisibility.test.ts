@@ -6,6 +6,11 @@ const node = (id: string, kind: string, extra: Record<string, unknown> = {}): cy
   ({ group: 'nodes', data: { id, kind, ...extra } }) as unknown as cytoscape.ElementDefinition;
 const cluster = (id: string): cytoscape.ElementDefinition =>
   ({ group: 'nodes', data: { id, isCluster: true } }) as unknown as cytoscape.ElementDefinition;
+const nodeGroup = (id: string, parent?: string): cytoscape.ElementDefinition =>
+  ({
+    group: 'nodes',
+    data: { id, isNodeGroup: true, label: 'nodes', ...(parent !== undefined ? { parent } : {}) },
+  }) as unknown as cytoscape.ElementDefinition;
 const edge = (id: string, source: string, target: string, edgeType: string): cytoscape.ElementDefinition =>
   ({ group: 'edges', data: { id, source, target, edgeType } }) as unknown as cytoscape.ElementDefinition;
 
@@ -61,6 +66,38 @@ describe('computeVisibility', () => {
     const { visibleNodeIds } = computeVisibility(elements, ['pod'], ['pod-calls-pod']);
     expect(visibleNodeIds.has('net')).toBe(false);
     expect(visibleNodeIds.has('sw1')).toBe(false);
+  });
+
+  it('never kind-filters the synthesized node group, and keeps its nodes reachable', () => {
+    // The group is kind-less, so no visibleKinds list — however stale — can hide it.
+    // Hiding it would hide every K8s node inside it (visibility is the AND over ancestors).
+    const elements = [
+      cluster('cl'),
+      nodeGroup('ng', 'cl'),
+      node('n1', 'node', { parent: 'ng' }),
+      node('p', 'pod', { parent: 'n1' }),
+      edge('e', 'p', 'n1', 'pod-to-node'),
+    ];
+    const { visibleNodeIds } = computeVisibility(elements, ['node', 'pod'], ['pod-to-node']);
+    expect(visibleNodeIds.has('ng')).toBe(true);
+    expect(visibleNodeIds.has('n1')).toBe(true);
+  });
+
+  it('orphan-cascades the node group away when its nodes are filtered out', () => {
+    const elements = [
+      cluster('cl'),
+      nodeGroup('ng', 'cl'),
+      node('n1', 'node', { parent: 'ng' }),
+      node('p', 'pod', { parent: 'cl' }),
+      node('p2', 'pod', { parent: 'cl' }),
+      edge('e', 'p', 'p2', 'pod-calls-pod'),
+    ];
+    // `node` hidden → the group has no visible child and no visible incident edge.
+    const { visibleNodeIds } = computeVisibility(elements, ['pod'], ['pod-calls-pod']);
+    expect(visibleNodeIds.has('n1')).toBe(false);
+    expect(visibleNodeIds.has('ng')).toBe(false);
+    // The cluster survives on its still-visible pods.
+    expect(visibleNodeIds.has('cl')).toBe(true);
   });
 
   it('hides edges whose edgeType is filtered out', () => {
@@ -176,6 +213,99 @@ describe('computeVisibility', () => {
       expect(visibleNodeIds.has('p1')).toBe(true);
       expect(visibleNodeIds.has('v')).toBe(true);
       expect(visibleNodeIds.has('p2')).toBe(false);
+    });
+  });
+
+  describe('hidden-ancestor endpoints', () => {
+    // Cytoscape's effective visibility is the AND of a node and every ancestor, so a
+    // descendant of a kind-filtered compound is already off-canvas. These cover the edges
+    // that used to stay drawn against their still-visible far endpoint.
+
+    it('drops the pod and its pod-mounts-pvc edge when the controller kind is hidden', () => {
+      const elements = [
+        cluster('cl'),
+        node('ctrl', 'deployment', { parent: 'cl', isController: true }),
+        node('p', 'pod', { parent: 'ctrl' }),
+        node('v', 'pvc', { parent: 'cl' }),
+        node('aggr', 'netapp-aggr'),
+        edge('mount', 'p', 'v', 'pod-mounts-pvc'),
+        edge('store', 'v', 'aggr', 'pvc-to-netapp-aggr'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'pvc', 'netapp-aggr'],
+        ['pod-mounts-pvc', 'pvc-to-netapp-aggr']
+      );
+      expect(visibleNodeIds.has('ctrl')).toBe(false);
+      expect(visibleNodeIds.has('p')).toBe(false);
+      expect(visibleEdgeIds.has('mount')).toBe(false);
+      // The far side keeps its own two-sided storage chain — only the one-sided edge goes.
+      expect(visibleNodeIds.has('v')).toBe(true);
+      expect(visibleNodeIds.has('aggr')).toBe(true);
+      expect(visibleEdgeIds.has('store')).toBe(true);
+    });
+
+    it('orphan-cascades the pvc when the dropped edge was its last', () => {
+      const elements = [
+        cluster('cl'),
+        node('ctrl', 'deployment', { parent: 'cl', isController: true }),
+        node('p', 'pod', { parent: 'ctrl' }),
+        node('v', 'pvc', { parent: 'cl' }),
+        // Unrelated survivors, so the assertion isolates the claim from the cluster cascade.
+        node('a', 'pod', { parent: 'cl' }),
+        node('b', 'pod', { parent: 'cl' }),
+        edge('mount', 'p', 'v', 'pod-mounts-pvc'),
+        edge('calls', 'a', 'b', 'pod-calls-pod'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'pvc'],
+        ['pod-mounts-pvc', 'pod-calls-pod']
+      );
+      expect(visibleEdgeIds.has('mount')).toBe(false);
+      expect(visibleNodeIds.has('v')).toBe(false);
+      expect(visibleNodeIds.has('cl')).toBe(true);
+      expect(visibleNodeIds.has('a')).toBe(true);
+      expect(visibleNodeIds.has('b')).toBe(true);
+    });
+
+    it('drops a leaving edge for any hidden compound kind, not just deployment', () => {
+      const elements = [
+        node('sts', 'statefulset', { isController: true }),
+        node('p', 'pod', { parent: 'sts' }),
+        node('svc', 'service'),
+        node('other', 'pod'),
+        edge('leave', 'p', 'svc', 'pod-calls-service'),
+        edge('sel', 'svc', 'other', 'service-selects-pod'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'service'],
+        ['pod-calls-service', 'service-selects-pod']
+      );
+      expect(visibleNodeIds.has('p')).toBe(false);
+      expect(visibleEdgeIds.has('leave')).toBe(false);
+      // The outside node stays on its own remaining edge.
+      expect(visibleNodeIds.has('svc')).toBe(true);
+      expect(visibleNodeIds.has('other')).toBe(true);
+      expect(visibleEdgeIds.has('sel')).toBe(true);
+    });
+
+    it('leaves an edge alone while both endpoints and all their ancestors stay visible', () => {
+      const elements = [
+        cluster('cl'),
+        node('ctrl', 'deployment', { parent: 'cl', isController: true }),
+        node('p', 'pod', { parent: 'ctrl' }),
+        node('v', 'pvc', { parent: 'cl' }),
+        edge('mount', 'p', 'v', 'pod-mounts-pvc'),
+      ];
+      const { visibleNodeIds, visibleEdgeIds } = computeVisibility(
+        elements,
+        ['pod', 'pvc', 'deployment'],
+        ['pod-mounts-pvc']
+      );
+      expect([...visibleNodeIds].sort()).toEqual(['cl', 'ctrl', 'p', 'v']);
+      expect([...visibleEdgeIds]).toEqual(['mount']);
     });
   });
 
